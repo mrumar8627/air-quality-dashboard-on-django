@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Air Quality Dashboard</title>
+
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  
+  <style>
+    body {
+      background: linear-gradient(135deg, #1c1c1c, #232323);
+      color: #fff;
+      font-family: 'Roboto', sans-serif;
+      margin: 0;
+      padding: 0;
+      text-align: center;
+      overflow: hidden; /* Prevents unwanted scrolling */
+      height: 100vh;
+    }
+
+    h1 {
+      font-size: 40px;
+      margin-top: 40px;
+      color: #39ff14;  /* Neon Green */
+      text-shadow: 0 0 10px #39ff14, 0 0 20px #39ff14;
+    }
+
+    p {
+      font-size: 18px;
+      color: #aaa;
+      margin: 10px 0 40px;
+    }
+
+    .card-container {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      margin: 0 20px 40px;
+      height: calc(100% - 120px); /* To keep the cards within the visible area */
+      overflow-y: auto;
+    }
+
+    .card {
+      background: #333;
+      border-radius: 12px;
+      padding: 20px;
+      margin: 20px;
+      width: 300px;
+      height: 300px; /* Fixed height for the cards */
+      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5);
+      transition: transform 0.3s, box-shadow 0.3s;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .card:hover {
+      transform: scale(1.05);
+      box-shadow: 0 6px 15px rgba(0, 255, 123, 0.8);
+    }
+
+    h4 {
+      font-size: 22px;
+      color: #ff9800;  /* Orange */
+    }
+
+    .card-content {
+      display: flex;
+      justify-content: center;
+      flex-grow: 1;
+    }
+
+    canvas {
+      width: 100%;
+      height: 150px; /* Fixed height for charts */
+    }
+
+    .value {
+      font-size: 26px;
+      font-weight: bold;
+      color: #39ff14;
+    }
+
+    #loading {
+      text-align: center;
+      display: none;
+    }
+
+    #loading img {
+      width: 80px;
+    }
+
+    footer {
+      margin-top: 50px;
+      font-size: 14px;
+      color: #888;
+    }
+
+    footer a {
+      color: #39ff14;
+      text-decoration: none;
+      font-weight: bold;
+    }
+
+    @media (max-width: 768px) {
+      .card-container {
+        flex-direction: column;
+        overflow-y: scroll; /* Allow scrolling on smaller screens */
+      }
+
+      h1 {
+        font-size: 36px;
+      }
+
+      .card {
+        width: 90%;
+        height: auto; /* Remove fixed height on smaller screens */
+      }
+    }
+  </style>
+</head>
+
+<body>
+
+  <!-- Header Section -->
+  <h1>Real-Time Air Quality Monitoring</h1>
+  <p>Powered by ESP8266 NodeMCU & DHT11 Sensor</p>
+
+  <!-- Loading Spinner -->
+  <div id="loading">
+    <!-- <img src="https://i.gifer.com/YCZH.gif" alt="Loading..." /> -->
+  </div>
+
+  <!-- Card Container for Data -->
+  <div class="card-container">
+
+    <!-- Temperature Card -->
+    <div class="card">
+      <h4>Temperature (°C)</h4>
+      <div class="card-content">
+        <canvas id="tempChart"></canvas>
+      </div>
+      <div class="card-content">
+        <span>Current: <span id="tempValue" class="value">Loading...</span> °C</span>
+      </div>
+    </div>
+
+    <!-- Humidity Card -->
+    <div class="card">
+      <h4>Humidity (%)</h4>
+      <div class="card-content">
+        <canvas id="humChart"></canvas>
+      </div>
+      <div class="card-content">
+        <span>Current: <span id="humValue" class="value">Loading...</span> %</span>
+      </div>
+    </div>
+
+    <!-- Gas Card -->
+    <div class="card">
+      <h4>Gas (Analog)</h4>
+      <div class="card-content">
+        <canvas id="gasChart"></canvas>
+      </div>
+      <div class="card-content">
+        <span>Current: <span id="gasValue" class="value">Loading...</span></span>
+      </div>
+    </div>
+
+  </div>
+
+
+  <!-- JavaScript Section -->
+  <script>
+    // Chart.js Configuration
+    function createLine(ctx, label, color) {
+      return new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: [],
+          datasets: [{
+            label: label,
+            data: [],
+            borderColor: color,
+            backgroundColor: color,
+            fill: false,
+            tension: 0.3,
+            pointRadius: 4,
+            pointBackgroundColor: color,
+            borderWidth: 2,
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            x: {
+              display: true,
+              title: {
+                display: true,
+                text: 'Time',
+                font: { size: 16 }
+              }
+            },
+            y: {
+              display: true,
+              title: {
+                display: true,
+                text: 'Value',
+                font: { size: 16 }
+              },
+              beginAtZero: false
+            }
+          },
+          animation: {
+            duration: 500,
+          }
+        }
+      });
+    }
+
+    // Update Charts with Data
+    function pushPoint(chart, label, value, maxPoints = 20) {
+      chart.data.labels.push(label);
+      chart.data.datasets[0].data.push(value);
+      if (chart.data.labels.length > maxPoints) {
+        chart.data.labels.shift();
+        chart.data.datasets[0].data.shift();
+      }
+      chart.update();
+    }
+
+    // Fetch Data from API and Update Charts
+    async function fetchAndUpdate() {
+      try {
+        // Show the loading spinner
+        document.getElementById('loading').style.display = 'block';
+
+        const res = await fetch("/api/nodemcu/", { cache: 'no-store' });
+        const data = await res.json();
+        document.getElementById('loading').style.display = 'none'; // Hide loading spinner
+
+        if (data.error) {
+          console.error("API error:", data.error);
+          return;
+        }
+
+        const now = new Date().toLocaleTimeString();
+
+        // Update temperature chart and value
+        if ('temperature' in data) {
+          pushPoint(tempChart, now, Number(data.temperature));
+          document.getElementById('tempValue').innerText = data.temperature.toFixed(2);
+        }
+
+        // Update humidity chart and value
+        if ('humidity' in data) {
+          pushPoint(humChart, now, Number(data.humidity));
+          document.getElementById('humValue').innerText = data.humidity.toFixed(2);
+        }
+
+        // Update gas chart and value
+        if ('analog' in data) {
+          pushPoint(gasChart, now, Number(data.analog));
+          document.getElementById('gasValue').innerText = data.analog.toFixed(2);
+        }
+      } catch (e) {
+        console.error("Fetch failed:", e);
+      }
+    }
+
+    // Initialize Charts
+    const tempChart = createLine(document.getElementById('tempChart').getContext('2d'), 'Temperature °C', '#39ff14');
+    const humChart = createLine(document.getElementById('humChart').getContext('2d'), 'Humidity %', '#00bcd4');
+    const gasChart = createLine(document.getElementById('gasChart').getContext('2d'), 'Gas (Analog)', '#ff9800');
+
+    // Fetch and Update Data Every 2 Seconds
+    setInterval(fetchAndUpdate, 2000);
+
+    // Initial Data Fetch
+    fetchAndUpdate();
+  </script>
+
